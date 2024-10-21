@@ -67,7 +67,7 @@ class Node:
         self.storage.clear()
 
 # Initialize the node
-node = Node(host='localhost', port=5001)
+node = Node(host='localhost', port=5080)
 
 # Flask routes
 @app.route('/')
@@ -109,5 +109,5 @@ def leave():
     return redirect(url_for('index'))
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
+    app.run(debug=True, port=8000)
     
