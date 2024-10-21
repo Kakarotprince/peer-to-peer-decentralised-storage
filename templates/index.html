@@ -9,45 +9,51 @@
     <h1>Peer-to-Peer Network</h1>
 
     <!-- Flash Messages -->
-    {% with messages = get_flashed_messages() %}
-      {% if messages %}
-        <ul>
-        {% for message in messages %}
-          <li>{{ message }}</li>
-        {% endfor %}
-        </ul>
-      {% endif %}
-    {% endwith %}
+    <section>
+        {% with messages = get_flashed_messages() %}
+          {% if messages %}
+            <ul role="alert">
+              {% for message in messages %}
+                <li>{{ message }}</li>
+              {% endfor %}
+            </ul>
+          {% endif %}
+        {% endwith %}
+    </section>
 
+    <!-- Join Network -->
     <h2>Join a Network</h2>
     <form action="/join" method="post">
         <label for="peer_host">Peer Host:</label>
-        <input type="text" id="peer_host" name="peer_host" required>
+        <input type="text" id="peer_host" name="peer_host" placeholder="e.g., 192.168.0.1" required>
         <label for="peer_port">Peer Port:</label>
-        <input type="number" id="peer_port" name="peer_port" required>
+        <input type="number" id="peer_port" name="peer_port" placeholder="e.g., 5000" required>
         <button type="submit">Join</button>
     </form>
 
+    <!-- Store Data -->
     <h2>Store Data</h2>
     <form action="/store" method="post">
-        <label for="peer_host">Peer Host:</label>
-        <input type="text" id="peer_host" name="peer_host" required>
-        <label for="peer_port">Peer Port:</label>
-        <input type="number" id="peer_port" name="peer_port" required>
+        <label for="peer_host_store">Peer Host:</label>
+        <input type="text" id="peer_host_store" name="peer_host" placeholder="e.g., 192.168.0.1" required>
+        <label for="peer_port_store">Peer Port:</label>
+        <input type="number" id="peer_port_store" name="peer_port" placeholder="e.g., 5000" required>
         <label for="data">Data to Store:</label>
-        <input type="text" id="data" name="data" required>
+        <input type="text" id="data" name="data" placeholder="Enter data" required>
         <button type="submit">Store Data</button>
     </form>
 
+    <!-- Retrieve Data -->
     <h2>Retrieve Data</h2>
     <form action="/retrieve" method="post">
-        <label for="peer_host">Peer Host:</label>
-        <input type="text" id="peer_host" name="peer_host" required>
-        <label for="peer_port">Peer Port:</label>
-        <input type="number" id="peer_port" name="peer_port" required>
+        <label for="peer_host_retrieve">Peer Host:</label>
+        <input type="text" id="peer_host_retrieve" name="peer_host" placeholder="e.g., 192.168.0.1" required>
+        <label for="peer_port_retrieve">Peer Port:</label>
+        <input type="number" id="peer_port_retrieve" name="peer_port" placeholder="e.g., 5000" required>
         <button type="submit">Retrieve Data</button>
     </form>
 
+    <!-- Leave Network -->
     <h2>Leave Network</h2>
     <form action="/leave" method="post">
         <button type="submit">Leave Network and Delete Data</button>

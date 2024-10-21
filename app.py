@@ -6,6 +6,8 @@ from cryptography.fernet import Fernet
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
+
+# Node class as before
 class Node:
     def __init__(self, host, port):
         self.host = host
@@ -18,11 +20,16 @@ class Node:
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allow reuse of address/port
         server.bind((self.host, self.port))
         server.listen(5)
-        while True:
-            client, address = server.accept()
-            threading.Thread(target=self.handle_peer, args=(client,)).start()
+        try:
+            while True:
+                client, address = server.accept()
+                threading.Thread(target=self.handle_peer, args=(client,)).start()
+        finally:
+            server.close()  # Ensure the server socket closes properly
+
 
     def handle_peer(self, client):
         try:
@@ -44,7 +51,16 @@ class Node:
             client.close()
 
     def join_network(self, peer_host, peer_port):
-        self.peers.append((peer_host, peer_port))
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.settimeout(5)  # Set a timeout for the connection attempt
+                client.connect((peer_host, peer_port))
+            # If the connection succeeds, add to peers
+            self.peers.append((peer_host, peer_port))
+            flash('Joined network successfully')
+        except (ConnectionRefusedError, socket.timeout):
+            # If connection fails, show error
+            flash('Failed to connect to peer. Please check the IP and port.')
 
     def store_data(self, peer_host, peer_port, data):
         encrypted_data = self.cipher.encrypt(data.encode('utf-8'))
@@ -64,10 +80,10 @@ class Node:
     def leave_network(self):
         self.storage.clear()
 
-# Initialize the node
-node = Node(host='localhost', port=5080)
+# Initialize node
+node = Node(host='localhost', port=5500)
 
-# Flask routes
+# Routes
 @app.route('/')
 def index():
     return render_template('index.html')
@@ -107,5 +123,5 @@ def leave():
     return redirect(url_for('index'))
 
 if __name__ == "__main__":
-    app.run(debug=True, port=8000)
-    
+    app.run(debug=True, port=3050)
+ 
