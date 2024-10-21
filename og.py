@@ -1,30 +1,36 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
-import threading
 import socket
+import threading
 import pickle
 from cryptography.fernet import Fernet
+import os
 
-app = Flask(__name__)
-app.secret_key = 'your_secret_key'
+# Generate encryption key for each user (in reality, you would save/load this securely)
+key = Fernet.generate_key()
+cipher = Fernet(key)
+
+# Node class (a peer in the network)
 class Node:
     def __init__(self, host, port):
         self.host = host
         self.port = port
         self.peers = []
         self.storage = {}
-        self.cipher = Fernet(Fernet.generate_key())
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
 
     def start_server(self):
+        # Peer server that listens for connections
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.bind((self.host, self.port))
         server.listen(5)
+        print(f"Node started on {self.host}:{self.port}, listening for peers...")
         while True:
             client, address = server.accept()
+            print(f"Connected to peer: {address}")
             threading.Thread(target=self.handle_peer, args=(client,)).start()
 
     def handle_peer(self, client):
+        # Handling communication with peers
         try:
             while True:
                 data = client.recv(1024)
@@ -33,6 +39,7 @@ class Node:
                     if command == 'STORE':
                         peer_id, encrypted_data = content
                         self.storage[peer_id] = encrypted_data
+                        print(f"Data stored for peer {peer_id}")
                     elif command == 'RETRIEVE':
                         peer_id = content
                         if peer_id in self.storage:
@@ -44,68 +51,58 @@ class Node:
             client.close()
 
     def join_network(self, peer_host, peer_port):
-        self.peers.append((peer_host, peer_port))
+        # Connect to an existing peer and share data
+        peer = (peer_host, peer_port)
+        self.peers.append(peer)
+        print(f"Joined network at {peer_host}:{peer_port}")
 
     def store_data(self, peer_host, peer_port, data):
-        encrypted_data = self.cipher.encrypt(data.encode('utf-8'))
+        # Encrypt the data and send to a peer for storage
+        encrypted_data = cipher.encrypt(data.encode('utf-8'))
+        peer = (peer_host, peer_port)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((peer_host, peer_port))
+            client.connect(peer)
             client.send(pickle.dumps(('STORE', (self.port, encrypted_data))))
+        print(f"Data stored in network at {peer_host}:{peer_port}")
 
     def retrieve_data(self, peer_host, peer_port):
+        # Retrieve encrypted data from peer and decrypt it
+        peer = (peer_host, peer_port)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((peer_host, peer_port))
+            client.connect(peer)
             client.send(pickle.dumps(('RETRIEVE', self.port)))
             response = pickle.loads(client.recv(1024))
             if response[0] == 'DATA':
-                return self.cipher.decrypt(response[1]).decode('utf-8')
-            return None
+                encrypted_data = response[1]
+                decrypted_data = cipher.decrypt(encrypted_data).decode('utf-8')
+                print(f"Retrieved and decrypted data: {decrypted_data}")
+            else:
+                print("Error retrieving data")
 
     def leave_network(self):
+        # When leaving, delete data and notify peers (placeholder logic)
         self.storage.clear()
+        print(f"Data deleted, leaving the network.")
 
-# Initialize the node
-node = Node(host='localhost', port=5001)
+# Main program for testing
+def main():
+    # Create a new peer (node)
+    node1 = Node(host='localhost', port=5000)
+    
+    # Create another peer (to simulate a network)
+    node2 = Node(host='localhost', port=5001)
+    
+    # Join node2 to node1's network
+    node2.join_network('localhost', 5000)
 
-# Flask routes
-@app.route('/')
-def index():
-    return render_template('index.html')
+    # Node1 stores data on node2
+    node1.store_data('localhost', 5001, 'Sensitive data from Node1')
 
-@app.route('/join', methods=['POST'])
-def join():
-    peer_host = request.form['peer_host']
-    peer_port = int(request.form['peer_port'])
-    node.join_network(peer_host, peer_port)
-    flash('Joined network successfully')
-    return redirect(url_for('index'))
+    # Node1 retrieves its data from node2
+    node1.retrieve_data('localhost', 5001)
 
-@app.route('/store', methods=['POST'])
-def store():
-    peer_host = request.form['peer_host']
-    peer_port = int(request.form['peer_port'])
-    data = request.form['data']
-    node.store_data(peer_host, peer_port, data)
-    flash('Data stored successfully')
-    return redirect(url_for('index'))
-
-@app.route('/retrieve', methods=['POST'])
-def retrieve():
-    peer_host = request.form['peer_host']
-    peer_port = int(request.form['peer_port'])
-    data = node.retrieve_data(peer_host, peer_port)
-    if data:
-        flash(f'Data retrieved: {data}')
-    else:
-        flash('Failed to retrieve data')
-    return redirect(url_for('index'))
-
-@app.route('/leave', methods=['POST'])
-def leave():
-    node.leave_network()
-    flash('Left the network and deleted data')
-    return redirect(url_for('index'))
+    # Node1 leaves the network
+    node1.leave_network()
 
 if __name__ == "__main__":
-    app.run(debug=True, port=5000)
-    
+    main()
