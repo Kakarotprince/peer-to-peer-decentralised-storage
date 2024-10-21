@@ -1,13 +1,24 @@
-from flask import Flask, render_template, request, redirect, url_for, flash
+import os
 import threading
 import socket
 import pickle
 from cryptography.fernet import Fernet
+from flask import Flask, render_template, request, redirect, url_for, flash, send_file
+from werkzeug.utils import secure_filename
+from io import BytesIO
+import struct  # To send and receive file size
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
-# Node class as before
+# Create a directory for temporary file storage
+UPLOAD_FOLDER = 'uploads'
+if not os.path.exists(UPLOAD_FOLDER):
+    os.makedirs(UPLOAD_FOLDER)
+
+app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
+
+# Node class
 class Node:
     def __init__(self, host, port):
         self.host = host
@@ -20,7 +31,7 @@ class Node:
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)  # Allow reuse of address/port
+        server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((self.host, self.port))
         server.listen(5)
         try:
@@ -28,60 +39,81 @@ class Node:
                 client, address = server.accept()
                 threading.Thread(target=self.handle_peer, args=(client,)).start()
         finally:
-            server.close()  # Ensure the server socket closes properly
-
+            server.close()
 
     def handle_peer(self, client):
         try:
             while True:
-                data = client.recv(1024)
+                data = client.recv(4096)
                 if data:
                     command, content = pickle.loads(data)
                     if command == 'STORE':
-                        peer_id, encrypted_data = content
-                        self.storage[peer_id] = encrypted_data
+                        peer_id, encrypted_file, filename = content
+                        self.storage[peer_id] = (encrypted_file, filename)
                     elif command == 'RETRIEVE':
                         peer_id = content
                         if peer_id in self.storage:
-                            encrypted_data = self.storage[peer_id]
-                            client.send(pickle.dumps(('DATA', encrypted_data)))
+                            encrypted_file, filename = self.storage[peer_id]
+                            # Send file size first
+                            file_size = len(encrypted_file)
+                            client.send(struct.pack('Q', file_size))  # Send file size (Q: unsigned long long)
+                            client.sendall(encrypted_file)  # Send the encrypted file
+                            client.send(pickle.dumps(('DATA', filename)))  # Send the filename
                         else:
-                            client.send(pickle.dumps(('ERROR', 'Data not found')))
+                            client.send(pickle.dumps(('ERROR', 'File not found')))
         finally:
             client.close()
 
     def join_network(self, peer_host, peer_port):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                client.settimeout(5)  # Set a timeout for the connection attempt
+                client.settimeout(5)
                 client.connect((peer_host, peer_port))
-            # If the connection succeeds, add to peers
             self.peers.append((peer_host, peer_port))
             flash('Joined network successfully')
         except (ConnectionRefusedError, socket.timeout):
-            # If connection fails, show error
             flash('Failed to connect to peer. Please check the IP and port.')
 
-    def store_data(self, peer_host, peer_port, data):
-        encrypted_data = self.cipher.encrypt(data.encode('utf-8'))
+    def store_file(self, peer_host, peer_port, filepath):
+        with open(filepath, 'rb') as file:
+            file_data = file.read()
+        encrypted_file = self.cipher.encrypt(file_data)
+        filename = os.path.basename(filepath)
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((peer_host, peer_port))
-            client.send(pickle.dumps(('STORE', (self.port, encrypted_data))))
+            client.send(pickle.dumps(('STORE', (self.port, encrypted_file, filename))))
 
-    def retrieve_data(self, peer_host, peer_port):
+    def retrieve_file(self, peer_host, peer_port):
         with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
             client.connect((peer_host, peer_port))
             client.send(pickle.dumps(('RETRIEVE', self.port)))
-            response = pickle.loads(client.recv(1024))
-            if response[0] == 'DATA':
-                return self.cipher.decrypt(response[1]).decode('utf-8')
-            return None
+
+            # First receive the file size
+            file_size_data = client.recv(8)  # 8 bytes for 'Q' format (unsigned long long)
+            file_size = struct.unpack('Q', file_size_data)[0]  # Unpack the file size
+
+            # Receive the file data in chunks based on file_size
+            data = b''
+            while len(data) < file_size:
+                packet = client.recv(4096)
+                if not packet:
+                    break
+                data += packet
+
+            # Decrypt the received file data
+            decrypted_file = self.cipher.decrypt(data)
+
+            # Receive the filename
+            filename_pickle = client.recv(4096)
+            filename = pickle.loads(filename_pickle)[1]
+
+            return decrypted_file, filename
 
     def leave_network(self):
         self.storage.clear()
 
 # Initialize node
-node = Node(host='localhost', port=5500)
+node = Node(host='localhost', port=int(input("Give port address: ")))
 
 # Routes
 @app.route('/')
@@ -100,21 +132,30 @@ def join():
 def store():
     peer_host = request.form['peer_host']
     peer_port = int(request.form['peer_port'])
-    data = request.form['data']
-    node.store_data(peer_host, peer_port, data)
-    flash('Data stored successfully')
+    file = request.files['file']
+    
+    if file:
+        filepath = os.path.join(app.config['UPLOAD_FOLDER'], secure_filename(file.filename))
+        file.save(filepath)
+        node.store_file(peer_host, peer_port, filepath)
+        flash('File stored successfully')
+    else:
+        flash('No file selected')
+    
     return redirect(url_for('index'))
 
 @app.route('/retrieve', methods=['POST'])
 def retrieve():
     peer_host = request.form['peer_host']
     peer_port = int(request.form['peer_port'])
-    data = node.retrieve_data(peer_host, peer_port)
-    if data:
-        flash(f'Data retrieved: {data}')
+    file_data, filename = node.retrieve_file(peer_host, peer_port)
+    
+    if file_data:
+        file_stream = BytesIO(file_data)
+        return send_file(file_stream, download_name=filename, as_attachment=True)
     else:
-        flash('Failed to retrieve data')
-    return redirect(url_for('index'))
+        flash('Failed to retrieve file')
+        return redirect(url_for('index'))
 
 @app.route('/leave', methods=['POST'])
 def leave():
@@ -124,4 +165,3 @@ def leave():
 
 if __name__ == "__main__":
     app.run(debug=True, port=3050)
- 
