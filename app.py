@@ -75,42 +75,73 @@ class Node:
             flash('Failed to connect to peer. Please check the IP and port.')
 
     def store_file(self, peer_host, peer_port, filepath):
-        with open(filepath, 'rb') as file:
-            file_data = file.read()
-        encrypted_file = self.cipher.encrypt(file_data)
-        filename = os.path.basename(filepath)
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((peer_host, peer_port))
-            client.send(pickle.dumps(('STORE', (self.port, encrypted_file, filename))))
+        try:
+            print(f"Storing file to {peer_host}:{peer_port}")
+            with open(filepath, 'rb') as file:
+                file_data = file.read()
+            encrypted_file = self.cipher.encrypt(file_data)
+            filename = os.path.basename(filepath)
+            
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.connect((peer_host, peer_port))
+                # Inform the peer to store the file
+                client.send(pickle.dumps(('STORE', (self.port, encrypted_file, filename))))
+            
+            flash(f'File {filename} stored successfully on peer {peer_host}:{peer_port}')
+        except Exception as e:
+            flash(f'Failed to store file: {str(e)}')
+
 
     def retrieve_file(self, peer_host, peer_port):
-        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-            client.connect((peer_host, peer_port))
-            client.send(pickle.dumps(('RETRIEVE', self.port)))
+        try:
+            print(f"Retrieving file from {peer_host}:{peer_port}")
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                client.connect((peer_host, peer_port))
+                client.send(pickle.dumps(('RETRIEVE', self.port)))
 
-            # First receive the file size
-            file_size_data = client.recv(8)  # 8 bytes for 'Q' format (unsigned long long)
-            file_size = struct.unpack('Q', file_size_data)[0]  # Unpack the file size
+                # First receive the file size
+                file_size_data = client.recv(8)  # 8 bytes for 'Q' format (unsigned long long)
+                if not file_size_data:
+                    return None, None
+                
+                file_size = struct.unpack('Q', file_size_data)[0]  # Unpack the file size
 
-            # Receive the file data in chunks based on file_size
-            data = b''
-            while len(data) < file_size:
-                packet = client.recv(4096)
-                if not packet:
-                    break
-                data += packet
+                # Receive the file data in chunks based on file_size
+                data = b''
+                while len(data) < file_size:
+                    packet = client.recv(4096)
+                    if not packet:
+                        break
+                    data += packet
 
-            # Decrypt the received file data
-            decrypted_file = self.cipher.decrypt(data)
+                # Decrypt the received file data
+                decrypted_file = self.cipher.decrypt(data)
 
-            # Receive the filename
-            filename_pickle = client.recv(4096)
-            filename = pickle.loads(filename_pickle)[1]
+                # Receive the filename
+                filename_pickle = client.recv(4096)
+                filename = pickle.loads(filename_pickle)[1]
 
-            return decrypted_file, filename
+                return decrypted_file, filename
+        except Exception as e:
+            print(f"Error during retrieval: {e}")
+            return None, None
+
 
     def leave_network(self):
-        self.storage.clear()
+        try:
+             # Clear in-memory storage dictionary
+            self.storage.clear()
+            # Delete all files in the uploads directory
+            upload_folder = app.config['UPLOAD_FOLDER']
+            for filename in os.listdir(upload_folder):
+                file_path = os.path.join(upload_folder, filename)
+                if os.path.isfile(file_path):
+                    os.remove(file_path)
+                    print(f"Deleted file: {file_path}")
+        except Exception as e:
+            flash(f"Error while leaving network: {str(e)}")
+
+
 
 # Initialize node
 node = Node(host='localhost', port=int(input("Give port address: ")))
@@ -148,14 +179,29 @@ def store():
 def retrieve():
     peer_host = request.form['peer_host']
     peer_port = int(request.form['peer_port'])
-    file_data, filename = node.retrieve_file(peer_host, peer_port)
     
-    if file_data:
-        file_stream = BytesIO(file_data)
-        return send_file(file_stream, download_name=filename, as_attachment=True)
-    else:
-        flash('Failed to retrieve file')
+    try:
+        # Retrieve file data and filename from the peer
+        file_data, filename = node.retrieve_file(peer_host, peer_port)
+        flash(filename)
+
+        if file_data:
+            # Create an in-memory file-like object from the decrypted file data
+            file_stream = BytesIO(file_data)
+            
+            # Set the pointer of the BytesIO stream back to the beginning
+            file_stream.seek(0)
+
+            # Send the file back as an attachment
+            return send_file(file_stream, download_name=filename, as_attachment=True)
+        else:
+            flash('Failed to retrieve file or file not found')
+            return redirect(url_for('index'))
+    
+    except Exception as e:
+        flash(f"Error retrieving file: {str(e)}")
         return redirect(url_for('index'))
+
 
 @app.route('/leave', methods=['POST'])
 def leave():
