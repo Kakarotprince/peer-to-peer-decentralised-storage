@@ -1,111 +1,124 @@
-/* Reset some default browser styles */
-* {
+/* Reset some default styling */
+*,
+*::before,
+*::after {
+    box-sizing: border-box;
     margin: 0;
     padding: 0;
-    box-sizing: border-box;
 }
 
 body {
-    font-family: Arial, sans-serif;
-    background-color: #f5f5f5;
-    color: #333;
-    line-height: 1.6;
+    font-family: 'Arial', sans-serif;
+    background-color: #121212;
+    color: #e0e0e0;
+    display: flex;
+    justify-content: center;
+    align-items: center;
+    min-height: 100vh;
     margin: 0;
-    padding: 20px;
 }
 
-h1, h2 {
-    color: #2c3e50;
-    margin-bottom: 20px;
-    text-align: center;
+.container {
+    width: 100%;
+    max-width: 600px;
+    padding: 20px;
+    background-color: #1e1e1e;
+    border-radius: 10px;
+    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.5);
 }
 
 h1 {
-    font-size: 2.5rem;
-    margin-bottom: 30px;
+    color: #bb86fc;
+    font-size: 1.8em;
+    text-align: center;
+    margin-bottom: 20px;
 }
 
 h2 {
-    font-size: 1.8rem;
-    margin-bottom: 15px;
+    color: #03dac5;
+    font-size: 1.4em;
+    margin-top: 30px;
+    margin-bottom: 10px;
 }
 
-section ul {
-    list-style-type: none;
-    padding: 0;
+.section {
     margin-bottom: 20px;
-    text-align: center;
 }
 
-section ul li {
-    background-color: #e74c3c;
-    color: white;
-    padding: 10px;
-    margin: 5px 0;
-    border-radius: 4px;
-}
-
-form {
-    background-color: white;
-    padding: 20px;
-    border-radius: 8px;
-    box-shadow: 0 4px 8px rgba(0, 0, 0, 0.1);
-    margin-bottom: 30px;
-    max-width: 600px;
-    margin: 0 auto;
+label, input, button {
+    font-size: 1em;
 }
 
 label {
-    font-weight: bold;
     display: block;
-    margin-bottom: 5px;
-    margin-top: 15px;
+    margin: 10px 0 5px;
+    color: #e0e0e0;
 }
 
 input[type="text"],
-input[type="number"],
-input[type="file"] {
-    width: calc(100% - 20px);
+input[type="file"],
+button {
+    width: 100%;
     padding: 10px;
-    margin-bottom: 20px;
-    border: 1px solid #ccc;
-    border-radius: 4px;
-}
-
-button[type="submit"] {
-    background-color: #3498db;
-    color: white;
-    padding: 10px 15px;
+    margin-top: 8px;
+    background-color: #333;
+    color: #e0e0e0;
     border: none;
-    border-radius: 4px;
-    cursor: pointer;
+    border-radius: 5px;
     transition: background-color 0.3s;
 }
 
-button[type="submit"]:hover {
-    background-color: #2980b9;
+input[type="text"]:focus,
+input[type="file"]:focus,
+button:hover {
+    background-color: #444;
+    outline: none;
 }
 
-/* Align the text fields side by side for smaller forms */
-form input[type="text"],
-form input[type="number"],
-form input[type="file"] {
-    display: block;
-    width: 100%;
+button {
+    background-color: #bb86fc;
+    color: #121212;
+    font-weight: bold;
+    cursor: pointer;
 }
 
-@media (min-width: 768px) {
-    form label {
-        display: inline-block;
-        width: 150px;
+button.btn-danger {
+    background-color: #cf6679;
+    color: #121212;
+}
+
+button:hover {
+    background-color: #9257d9;
+}
+
+.btn-danger:hover {
+    background-color: #b04155;
+}
+
+/* Flash messages */
+#notifications ul {
+    list-style: none;
+    padding: 0;
+    margin: 10px 0;
+}
+
+.alert {
+    padding: 10px;
+    margin-bottom: 10px;
+    background-color: #cf6679;
+    color: #121212;
+    border-radius: 5px;
+    text-align: center;
+}
+
+/* Toggle Visibility for Join Network Section */
+#join-info {
+    display: none;
+}
+
+/* Responsiveness */
+@media (max-width: 600px) {
+    h1 {
+        font-size: 1.5em;
     }
-
-    form input[type="text"],
-    form input[type="number"],
-    form input[type="file"] {
-        display: inline-block;
-        width: calc(100% - 160px);
-        margin-left: 10px;
-    }
 }
-
