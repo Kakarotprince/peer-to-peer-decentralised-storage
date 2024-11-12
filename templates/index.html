@@ -8,94 +8,81 @@
 </head>
 <body>
     <div class="container">
-        <h1>Peer-to-Peer Decentralized Storage</h1>
+        <header>
+            <h1>Peer-to-Peer Network</h1>
+        </header>
 
-        <!-- Flash Messages -->
-        <section id="notifications">
+        <section class="flash-messages">
             {% with messages = get_flashed_messages() %}
               {% if messages %}
                 <ul role="alert">
                   {% for message in messages %}
-                    <li class="alert">{{ message }}</li>
+                    <li>{{ message }}</li>
                   {% endfor %}
                 </ul>
               {% endif %}
             {% endwith %}
         </section>
 
-        <!-- Connect or Create Network -->
-        <section class="section">
+        <section class="network-section">
             <h2>Connect to a Network</h2>
-            <form action="/connect" method="post">
+            <form action="/connect" method="post" class="network-form">
                 <label>
                     <input type="radio" name="action" value="create" required>
                     Create New Network
                 </label>
-                <br>
                 <label>
                     <input type="radio" name="action" value="join">
                     Join Existing Network
                 </label>
-                <div id="join-info" style="display: none;">
+                <div id="join-info" class="join-info">
                     <label for="peer_host">Enter Host IP:</label>
                     <input type="text" id="peer_host" name="peer_host" placeholder="e.g., 192.168.0.1">
                 </div>
-                <button type="submit">Proceed</button>
+                <label for="storage_limit">Storage Limit (MB):</label>
+                <input type="number" id="storage_limit" name="storage_limit" min="1" required>
+                <button type="submit" class="button-primary">Proceed</button>
             </form>
         </section>
 
-        <!-- Encryption Key Section -->
-        <section class="section">
-            <h2>Set Encryption Key</h2>
-            <form action="/set_encryption_key" method="post">
-                <label for="custom_key">Enter Custom Key (optional):</label>
-                <input type="text" id="custom_key" name="custom_key">
-                <button type="submit">Set Key</button>
-            </form>
-        </section>
-
-        <!-- Peer List Display -->
-        <section class="section">
+        <section class="network-info">
             <h2>Connected Peers</h2>
-            <ul>
-                {% for peer in peers %}
-                <li>{{ peer }}</li>
+            <ul class="peer-list">
+                {% for peer_host, peer_storage in peers %}
+                    <li>{{ peer_host }} ({{ peer_storage }} MB)</li>
                 {% endfor %}
             </ul>
+            <p>Total Network Storage Available: {{ total_storage }} MB</p>
         </section>
 
-        <!-- Store File -->
-        <section class="section">
-            <h2>Store File</h2>
-            <form action="/store" method="post" enctype="multipart/form-data">
-                <label for="file">Choose File:</label>
-                <input type="file" id="file" name="file">
-                <button type="submit" class="btn">Store File</button>
+        <section class="file-section">
+            <h2>Store a File</h2>
+            <form action="/store" method="post" enctype="multipart/form-data" class="file-form">
+                <input type="file" name="file" required>
+                <button type="submit" class="button-primary">Store File</button>
             </form>
         </section>
 
-        <!-- Retrieve File Section -->
-        <section class="section">
+        <section class="file-section">
             <h2>Retrieve File</h2>
             <form action="/retrieve" method="post">
-                <button type="submit" class="btn">Retrieve File</button>
+                <button type="submit" class="button-secondary">Retrieve File</button>
             </form>
         </section>
 
-        <!-- Leave Network Section -->
-        <section class="section">
+        <section class="network-section">
+            <h2>Leave Network</h2>
             <form action="/leave" method="post">
-                <button type="submit" class="btn btn-danger">Leave Network</button>
+                <button type="submit" class="button-danger">Leave Network</button>
             </form>
         </section>
     </div>
 
     <script>
-        document.querySelector('input[name="action"][value="join"]').addEventListener('click', function() {
-            document.getElementById('join-info').style.display = 'block';
-        });
-        document.querySelector('input[name="action"][value="create"]').addEventListener('click', function() {
-            document.getElementById('join-info').style.display = 'none';
+        document.querySelectorAll('input[name="action"]').forEach(radio => {
+            radio.addEventListener('change', function() {
+                document.getElementById('join-info').style.display = this.value === 'join' ? 'block' : 'none';
+            });
         });
     </script>
 </body>
