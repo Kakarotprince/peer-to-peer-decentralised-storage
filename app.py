@@ -39,7 +39,7 @@ class Node:
         self.gateway = self.setup_upnp()
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
-
+#
     def setup_upnp(self):
         """Set up UPnP and forward the required port."""
         try:
