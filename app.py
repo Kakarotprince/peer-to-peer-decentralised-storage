@@ -22,6 +22,8 @@ if not os.path.exists(UPLOAD_FOLDER):
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
+import upnpy
+
 # Node class
 class Node:
     def __init__(self, host, storage_limit):
@@ -33,8 +35,39 @@ class Node:
         self.used_storage = 0  # Track used storage space
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
+        self.upnp = upnpy.UPnP()
+        self.gateway = self.setup_upnp()
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
+
+    def setup_upnp(self):
+        """Set up UPnP and forward the required port."""
+        try:
+            # Discover the gateway
+            devices = self.upnp.discover()
+            gateway = devices[0]
+            # Add port mapping
+            gateway.add_port_mapping(
+                self.port,  # External port
+                self.port,  # Internal port
+                self.host,
+                'TCP',
+                'P2P File Sharing Node'
+            )
+            print(f"Port {self.port} forwarded via UPnP")
+            return gateway
+        except Exception as e:
+            print(f"UPnP setup failed: {e}")
+            return None
+
+    def release_upnp(self):
+        """Remove the port mapping via UPnP."""
+        if self.gateway:
+            try:
+                self.gateway.delete_port_mapping(self.port, 'TCP')
+                print(f"Port {self.port} mapping removed")
+            except Exception as e:
+                print(f"Failed to remove UPnP port mapping: {e}")
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -49,6 +82,10 @@ class Node:
                 threading.Thread(target=self.handle_peer, args=(client,)).start()
         finally:
             server.close()
+            self.release_upnp()
+
+    # Other methods remain unchanged
+
 
     def handle_peer(self, client):
         try:
