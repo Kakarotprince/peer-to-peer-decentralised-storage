@@ -2,19 +2,20 @@ import os
 import threading
 import socket
 import pickle
+import time
 from cryptography.fernet import Fernet
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 from werkzeug.utils import secure_filename
+from pyngrok import ngrok
 from io import BytesIO
-import struct
-import time
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
 
 # Constants
 UPLOAD_FOLDER = 'uploads'
-COMMON_PORT = 5000  # Common port for all peers
+COMMON_PORT = 5000  # Common port for Flask app
+NGROK_PUBLIC_URL = None  # To store ngrok's public URL
 
 # Ensure the upload folder exists
 if not os.path.exists(UPLOAD_FOLDER):
@@ -22,9 +23,7 @@ if not os.path.exists(UPLOAD_FOLDER):
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-import upnpy
-
-# Node class
+# Node class for managing networked nodes
 class Node:
     def __init__(self, host, storage_limit):
         self.host = host
@@ -35,39 +34,9 @@ class Node:
         self.used_storage = 0  # Track used storage space
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
-        self.upnp = upnpy.UPnP()
-        self.gateway = self.setup_upnp()
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
-#
-    def setup_upnp(self):
-        """Set up UPnP and forward the required port."""
-        try:
-            # Discover the gateway
-            devices = self.upnp.discover()
-            gateway = devices[0]
-            # Add port mapping
-            gateway.add_port_mapping(
-                self.port,  # External port
-                self.port,  # Internal port
-                self.host,
-                'TCP',
-                'P2P File Sharing Node'
-            )
-            print(f"Port {self.port} forwarded via UPnP")
-            return gateway
-        except Exception as e:
-            print(f"UPnP setup failed: {e}")
-            return None
-
-    def release_upnp(self):
-        """Remove the port mapping via UPnP."""
-        if self.gateway:
-            try:
-                self.gateway.delete_port_mapping(self.port, 'TCP')
-                print(f"Port {self.port} mapping removed")
-            except Exception as e:
-                print(f"Failed to remove UPnP port mapping: {e}")
+        print(f"Node initialized on {self.host}:{self.port}")
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -82,10 +51,6 @@ class Node:
                 threading.Thread(target=self.handle_peer, args=(client,)).start()
         finally:
             server.close()
-            self.release_upnp()
-
-    # Other methods remain unchanged
-
 
     def handle_peer(self, client):
         try:
@@ -154,10 +119,6 @@ class Node:
         except Exception as e:
             flash(f'Failed to store file: {str(e)}')
 
-    def calculate_total_network_storage(self):
-        """Calculate the total available storage across all peers."""
-        return sum(peer_storage for _, peer_storage in self.peers) + (self.storage_limit - self.used_storage) / (1024 * 1024)
-
     def retrieve_file(self):
         file_data, filename, timestamp = self.storage.get(self.port, (None, None, None))
         if file_data:
@@ -174,6 +135,18 @@ class Node:
             if os.path.isfile(file_path):
                 os.remove(file_path)
                 print(f"Deleted file: {file_path}")
+    # Add this method inside the Node class
+    def calculate_total_network_storage(self):
+        """Calculate the total available storage across all peers."""
+        # Calculate the remaining storage on the current node
+        remaining_storage = self.storage_limit - self.used_storage
+        # Convert to MB for consistency
+        remaining_storage_mb = remaining_storage / (1024 * 1024)
+        
+        # Add storage limits of peers
+        total_storage_mb = sum(peer[1] for peer in self.peers) + remaining_storage_mb
+        return total_storage_mb
+
 
 # Initialize Node with the current host IP
 current_host = socket.gethostbyname(socket.gethostname())
@@ -183,14 +156,14 @@ node = None
 def index():
     global node
     total_storage = node.calculate_total_network_storage() if node else 0
-    return render_template('index.html', host_ip=node.host if node else current_host, peers=node.peers if node else [], total_storage=total_storage)
+    return render_template('index.html', host_ip=NGROK_PUBLIC_URL or current_host, peers=node.peers if node else [], total_storage=total_storage)
 
 @app.route('/connect', methods=['POST'])
 def connect():
     global node
     action = request.form['action']
     storage_limit = int(request.form['storage_limit'])
-    node = Node(current_host, storage_limit)
+    node = Node(NGROK_PUBLIC_URL or current_host, storage_limit)
 
     if action == 'create':
         flash(f"Network created with {storage_limit} MB storage. Your IP address is {node.host}")
@@ -238,4 +211,10 @@ def leave():
     return redirect(url_for('index'))
 
 if __name__ == "__main__":
-    app.run(debug=True, port=3050)
+    # Start ngrok
+    public_url = ngrok.connect(COMMON_PORT)
+    NGROK_PUBLIC_URL = public_url.public_url
+    print(f"Ngrok tunnel established: {NGROK_PUBLIC_URL}")
+
+    # Start Flask
+    app.run(port=COMMON_PORT)
