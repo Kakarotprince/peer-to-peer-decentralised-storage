@@ -6,8 +6,8 @@ from cryptography.fernet import Fernet
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 from werkzeug.utils import secure_filename
 from io import BytesIO
+import struct
 import time
-import upnpclient
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -22,46 +22,6 @@ if not os.path.exists(UPLOAD_FOLDER):
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 
-# UPnP Manager for port forwarding
-class UPnPManager:
-    def __init__(self):
-        self.devices = upnpclient.discover()
-
-    def add_port_mapping(self, internal_port, external_port, protocol="TCP"):
-        if not self.devices:
-            raise RuntimeError("No UPnP devices found. Ensure your router supports UPnP and it is enabled.")
-        device = self.devices[0]
-        try:
-            device.AddPortMapping(
-                NewRemoteHost="",
-                NewExternalPort=external_port,
-                NewProtocol=protocol,
-                NewInternalPort=internal_port,
-                NewInternalClient=socket.gethostbyname(socket.gethostname()),
-                NewEnabled="1",
-                NewPortMappingDescription="P2P Network",
-                NewLeaseDuration=0
-            )
-            print(f"Port {external_port} forwarded successfully.")
-        except Exception as e:
-            print(f"Failed to add port mapping: {e}")
-            raise
-
-    def remove_port_mapping(self, external_port, protocol="TCP"):
-        if not self.devices:
-            raise RuntimeError("No UPnP devices found. Ensure your router supports UPnP and it is enabled.")
-        device = self.devices[0]
-        try:
-            device.DeletePortMapping(
-                NewRemoteHost="",
-                NewExternalPort=external_port,
-                NewProtocol=protocol
-            )
-            print(f"Port {external_port} mapping removed successfully.")
-        except Exception as e:
-            print(f"Failed to remove port mapping: {e}")
-            raise
-
 # Node class
 class Node:
     def __init__(self, host, storage_limit):
@@ -73,11 +33,6 @@ class Node:
         self.used_storage = 0  # Track used storage space
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
-        self.upnp_manager = UPnPManager()
-        try:
-            self.upnp_manager.add_port_mapping(COMMON_PORT, COMMON_PORT, protocol="TCP")
-        except RuntimeError as e:
-            print(f"UPnP setup failed: {e}")
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
 
@@ -163,6 +118,7 @@ class Node:
             flash(f'Failed to store file: {str(e)}')
 
     def calculate_total_network_storage(self):
+        """Calculate the total available storage across all peers."""
         return sum(peer_storage for _, peer_storage in self.peers) + (self.storage_limit - self.used_storage) / (1024 * 1024)
 
     def retrieve_file(self):
@@ -175,10 +131,6 @@ class Node:
 
     def leave_network(self):
         self.storage.clear()
-        try:
-            self.upnp_manager.remove_port_mapping(COMMON_PORT, protocol="TCP")
-        except RuntimeError as e:
-            print(f"Failed to clean up UPnP mapping: {e}")
         upload_folder = app.config['UPLOAD_FOLDER']
         for filename in os.listdir(upload_folder):
             file_path = os.path.join(upload_folder, filename)
@@ -249,4 +201,4 @@ def leave():
     return redirect(url_for('index'))
 
 if __name__ == "__main__":
-    app.run(host='0.0.0.0', port=3050, debug=True)
+    app.run(debug=True, port=3050)
