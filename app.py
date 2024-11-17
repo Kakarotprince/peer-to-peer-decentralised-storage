@@ -2,11 +2,12 @@ import os
 import threading
 import socket
 import pickle
+import requests
 from cryptography.fernet import Fernet
 from flask import Flask, render_template, request, redirect, url_for, flash, send_file
 from werkzeug.utils import secure_filename
 from io import BytesIO
-import struct
+import miniupnpc
 import time
 
 app = Flask(__name__)
@@ -15,6 +16,8 @@ app.secret_key = 'your_secret_key'
 # Constants
 UPLOAD_FOLDER = 'uploads'
 COMMON_PORT = 5000  # Common port for all peers
+SSL_CERT = 'cert.pem'
+SSL_KEY = 'key.pem'
 
 # Ensure the upload folder exists
 if not os.path.exists(UPLOAD_FOLDER):
@@ -33,15 +36,39 @@ class Node:
         self.used_storage = 0  # Track used storage space
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
+        self.public_ip = self.get_public_ip()
+        self.setup_port_forwarding()
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
+
+    def get_public_ip(self):
+        """Retrieve the public IP of the machine using an external service."""
+        try:
+            response = requests.get('https://api.ipify.org')
+            response.raise_for_status()
+            return response.text
+        except requests.RequestException as e:
+            print(f"Failed to retrieve public IP: {e}")
+            return socket.gethostbyname(socket.gethostname())
+
+    def setup_port_forwarding(self):
+        """Automatically forward the required port using UPnP."""
+        try:
+            upnp = miniupnpc.UPnP()
+            upnp.discoverdelay = 200
+            upnp.discover()
+            upnp.selectigd()
+            upnp.addportmapping(self.port, 'TCP', self.host, self.port, 'Flask P2P Node', '')
+            print(f"Port {self.port} forwarded successfully.")
+        except Exception as e:
+            print(f"UPnP Port Forwarding failed: {e}")
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         server.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         server.bind((self.host, self.port))
         server.listen(5)
-        print(f"Node started on {self.host}:{self.port}")
+        print(f"Node started on {self.host}:{self.port} (Public: {self.public_ip}:{self.port})")
 
         try:
             while True:
@@ -77,7 +104,7 @@ class Node:
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 client.connect((peer_host, COMMON_PORT))
-                client.send(pickle.dumps(('JOIN', (self.host, peer_storage_limit))))
+                client.send(pickle.dumps(('JOIN', (self.public_ip, peer_storage_limit))))
             self.peers.append((peer_host, peer_storage_limit))
             flash('Connected to existing network successfully')
         except (ConnectionRefusedError, socket.timeout):
@@ -146,7 +173,7 @@ node = None
 def index():
     global node
     total_storage = node.calculate_total_network_storage() if node else 0
-    return render_template('index.html', host_ip=node.host if node else current_host, peers=node.peers if node else [], total_storage=total_storage)
+    return render_template('index.html', host_ip=node.public_ip if node else current_host, peers=node.peers if node else [], total_storage=total_storage)
 
 @app.route('/connect', methods=['POST'])
 def connect():
@@ -156,7 +183,7 @@ def connect():
     node = Node(current_host, storage_limit)
 
     if action == 'create':
-        flash(f"Network created with {storage_limit} MB storage. Your IP address is {node.host}")
+        flash(f"Network created with {storage_limit} MB storage. Your public IP is {node.public_ip}")
     elif action == 'join':
         peer_host = request.form['peer_host']
         node.connect_to_network(peer_host, storage_limit)
@@ -201,4 +228,6 @@ def leave():
     return redirect(url_for('index'))
 
 if __name__ == "__main__":
-    app.run(debug=True, port=3050)
+    if not os.path.exists(SSL_CERT) or not os.path.exists(SSL_KEY):
+        os.system(f"openssl req -x509 -newkey rsa:2048 -keyout {SSL_KEY} -out {SSL_CERT} -days 365 -nodes -subj '/CN=localhost'")
+    app.run(host='0.0.0.0', port=3050, ssl_context=(SSL_CERT, SSL_KEY))
