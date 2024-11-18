@@ -66,6 +66,8 @@
         <section class="file-section">
             <h2>Retrieve File</h2>
             <form action="/retrieve" method="post">
+                <label for="filename">Enter the filename to retrieve:</label>
+                <input type="text" name="filename" id="filename" required>
                 <button type="submit" class="button-secondary">Retrieve File</button>
             </form>
         </section>

@@ -19,7 +19,11 @@ This project is a simple **peer-to-peer (P2P) network** where users can join or 
 
 ## Prerequisites
 
-Make sure you have Python installed (version 3.x). Install the required dependencies by running:
+Make sure you have Python installed (version 3.x). Install the required dependencies by running
 
 ```bash
 pip install Flask cryptography
+```
+## use mobile hotspot
+## SET wifi network as private
+## Disable firewall for private network
