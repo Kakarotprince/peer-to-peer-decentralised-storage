@@ -9,6 +9,7 @@ from io import BytesIO
 import struct
 import time
 import random
+import hashlib
 
 app = Flask(__name__)
 app.secret_key = 'your_secret_key'
@@ -48,19 +49,36 @@ def receive_data(client):
 
     return pickle.loads(data)
 
+def calculate_hash(data):
+        """Calculate the SHA-256 hash of the given data."""
+        return hashlib.sha256(data).hexdigest()
+
 # Node class with enhanced functionality
 class Node:
     def __init__(self, host, storage_limit):
         self.host = host
         self.port = COMMON_PORT
-        self.peers = []
+        self.peers = []  # Each peer is now a tuple: (peer_host, peer_storage_limit, reliability_score)
         self.storage = {}
         self.storage_limit = storage_limit * 1024 * 1024  # Convert MB to bytes
-        self.used_storage = 0  # Track used storage space
+        self.used_storage = 0
         self.encryption_key = Fernet.generate_key()
         self.cipher = Fernet(self.encryption_key)
         self.server_thread = threading.Thread(target=self.start_server)
         self.server_thread.start()
+
+    def update_peer_score(self, peer_host, success=True):
+        """Increase or decrease the reliability score of a peer."""
+        for idx, (host, limit, score) in enumerate(self.peers):
+            if host == peer_host:
+                new_score = score + 1 if success else max(score - 1, 0)
+                self.peers[idx] = (host, limit, new_score)
+                break
+
+    def get_reliable_peers(self):
+        """Return a sorted list of peers based on reliability score."""
+        return sorted(self.peers, key=lambda peer: peer[2], reverse=True)
+
 
     def start_server(self):
         server = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
@@ -85,9 +103,13 @@ class Node:
                     command, content = received_data
                     if command == 'JOIN':
                         peer_host, peer_storage_limit = content
-                        if peer_host not in [peer[0] for peer in self.peers]:
+                        if peer_host != self.host and peer_host not in [peer[0] for peer in self.peers]:
                             self.peers.append((peer_host, peer_storage_limit))
                             self.broadcast_peers()
+                            # Send the current peer list back to the newly joined peer (excluding self)
+                            filtered_peers = [(p_host, p_storage) for p_host, p_storage in self.peers if p_host != self.host]
+                            send_data(client, ('PEERS', filtered_peers))
+                    
                     elif command == 'STORE_CHUNK':
                         port, chunk_id, chunk, filename, timestamp, chunk_size = content
                         if self.used_storage + chunk_size <= self.storage_limit:
@@ -105,36 +127,110 @@ class Node:
                             send_data(client, ('CHUNK_STORED', f'Chunk {chunk_id} stored successfully'))
                         else:
                             send_data(client, ('ERROR', 'Insufficient storage space'))
+
+                    elif command == 'RETRIEVE_CHUNK':
+                        chunk_id = content
+                        if chunk_id in self.storage:
+                            # Retrieve chunk from storage
+                            chunk_path, filename, timestamp = self.storage[chunk_id]
+                            
+                            # Read the chunk from disk
+                            try:
+                                with open(chunk_path, 'rb') as chunk_file:
+                                    encrypted_chunk = chunk_file.read()
+                                # Send back the data, consider using a larger buffer size if necessary
+                                send_data(client, ('CHUNK_DATA', (chunk_id, encrypted_chunk, filename, timestamp)))
+                            except FileNotFoundError:
+                                print(f'{filename} not in {chunk_path}')
+                                send_data(client, ('ERROR', f'Chunk {chunk_id} not found on disk'))
+                        else:
+                            send_data(client, ('ERROR', f'Chunk {chunk_id} not found in storage'))
+                    elif command == 'DELETE_CHUNKS':
+                        peer_host = content
+                        self.delete_chunks_from_peer(peer_host)
+                        print("initiated delete protocol")
                     elif command == 'PEERS':
-                        self.peers = content
+                        updated_peers = [peer for peer in content if peer[0] != self.host]
+                        self.peers = updated_peers
+                        print(f"Updated peers (excluding self): {self.peers}")
+                        flash('Peer list updated')
         except Exception as e:
             print(f"Error handling peer: {e}")
         finally:
             client.close()
 
-
-
-
     def connect_to_network(self, peer_host, peer_storage_limit):
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                 client.connect((peer_host, COMMON_PORT))
-                client.send(pickle.dumps(('JOIN', (self.host, peer_storage_limit))))
-            self.peers.append((peer_host, peer_storage_limit))
+                send_data(client, ('JOIN', (self.host, peer_storage_limit)))
+                
+                # Request the current list of peers from the connected network
+                response_data = receive_data(client)
+                if response_data:
+                    command, content = response_data
+                    if command == 'PEERS':
+                        # Update this peer's list with the received list (excluding self)
+                        self.peers = [peer for peer in content if peer[0] != self.host]
+                        print(f"Received updated peer list (excluding self): {self.peers}")
+                        self.broadcast_peers()  # Inform other peers of this peer's existence
+
+            # Add the connected peer itself
+            if (peer_host, peer_storage_limit) not in self.peers and peer_host != self.host:
+                self.peers.append((peer_host, peer_storage_limit))
             flash('Connected to existing network successfully')
+
         except (ConnectionRefusedError, socket.timeout):
             flash('Failed to connect to existing network.')
 
     def broadcast_peers(self):
+        """Send the updated list of peers to each connected peer (excluding self)."""
         for peer_host, peer_storage_limit in self.peers:
-            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
-                try:
-                    client.connect((peer_host, COMMON_PORT))
-                    send_data(client, ('PEERS', self.peers))
-                except:
-                    pass
+            if peer_host != self.host:  # Avoid sending to itself
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    try:
+                        client.connect((peer_host, COMMON_PORT))
+                        # Send the peer list, excluding the current node itself
+                        filtered_peers = [(p_host, p_storage) for p_host, p_storage in self.peers if p_host != peer_host]
+                        send_data(client, ('PEERS', filtered_peers))
+                    except Exception as e:
+                        print(f"Error broadcasting to peer {peer_host}: {str(e)}")
 
+    
+    
+    def check_and_replicate_chunks(self):
+        """Check if each chunk has enough replicas, if not, replicate it."""
+        for chunk_id, (chunk_path, filename, timestamp) in self.storage.items():
+            # Count how many peers have this chunk
+            replica_count = 0
+            for peer_host, _, _ in self.peers:
+                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                    try:
+                        client.connect((peer_host, COMMON_PORT))
+                        send_data(client, ('RETRIEVE_CHUNK', chunk_id))
+                        response_data = receive_data(client)
+                        if response_data and response_data[0] == 'CHUNK_DATA':
+                            replica_count += 1
+                    except:
+                        continue
 
+            # If under-replicated, replicate the chunk to other peers
+            if replica_count < REPLICATION_FACTOR:
+                with open(chunk_path, 'rb') as chunk_file:
+                    chunk = chunk_file.read()
+                    for _ in range(REPLICATION_FACTOR - replica_count):
+                        # Choose a reliable peer to store the additional replica
+                        chosen_peer = random.choice(self.get_reliable_peers())
+                        peer_host = chosen_peer[0]
+                        try:
+                            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                                client.connect((peer_host, COMMON_PORT))
+                                send_data(client, ('STORE_CHUNK', (self.port, chunk_id, chunk, filename, timestamp, len(chunk))))
+                                print(f"Replicated {chunk_id} to {peer_host}")
+                        except Exception as e:
+                            print(f"Error replicating chunk {chunk_id} to {peer_host}: {str(e)}")
+
+    
     def store_file(self, filepath):
         try:
             with open(filepath, 'rb') as file:
@@ -151,8 +247,15 @@ class Node:
 
             for chunk_id, chunk in zip(chunk_ids, chunks):
                 for _ in range(REPLICATION_FACTOR):
+                    # Exclude the current host from available peers
+                    available_peers = [peer for peer in self.peers if peer[0] != self.host]
+
+                    if not available_peers:
+                        flash('No other peers available for storage')
+                        return
+
                     # Randomly select a peer to store each chunk
-                    chosen_peer = random.choice(self.peers) if self.peers else (self.host, self.storage_limit)
+                    chosen_peer = random.choice(available_peers)
                     peer_host = chosen_peer[0]
 
                     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
@@ -175,35 +278,70 @@ class Node:
 
             self.used_storage += file_size
             os.remove(filepath)
-            flash(f'File {filename} stored successfully across network in chunks')
+            flash(f'File {filename} stored successfully across the network in chunks')
         except Exception as e:
             flash(f'Failed to store file: {str(e)}')
 
 
+
     def retrieve_file(self, filename):
         """Retrieve and reassemble a file from chunks."""
-        chunk_ids = [f"{filename}_chunk_{i}" for i in range(1000)]  # Assuming a reasonable max chunk limit
         retrieved_chunks = []
+        chunk_id_index = 0  # Start with the first chunk
+        missing_chunk = False  # Flag to indicate if a chunk is missing
 
-        for chunk_id in chunk_ids:
+        while not missing_chunk:
+            chunk_id = f"{filename}_chunk_{chunk_id_index}"
             found_chunk = False
+
+            # Check each peer for the current chunk
             for peer_host, _ in self.peers:
                 with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
                     try:
+                        client.settimeout(15)  # Set a timeout to avoid indefinite waiting
                         client.connect((peer_host, COMMON_PORT))
-                        client.send(pickle.dumps(('RETRIEVE_CHUNK', chunk_id)))
-                        response, content = pickle.loads(client.recv(4096))
+                        send_data(client, ('RETRIEVE_CHUNK', chunk_id))
+
+                        # Properly receive the response using receive_data
+                        response_data = receive_data(client)
+                        if response_data is None:
+                            print(f"No valid data received from {peer_host} for chunk {chunk_id}")
+                            continue
+
+                        response, content = response_data
 
                         if response == 'CHUNK_DATA':
                             chunk_id, encrypted_chunk, filename, timestamp = content
                             retrieved_chunks.append((chunk_id, encrypted_chunk))
                             found_chunk = True
-                            break
-                    except:
-                        pass
+                            break  # Break if the chunk is successfully found
+                        elif response == 'ERROR':
+                            print(f"Received error for chunk {chunk_id} from {peer_host}: {content}")
+                            continue
+                        else:
+                            print(f"Received unexpected response from {peer_host}: {response}")
+
+                    except socket.timeout:
+                        print(f"Timeout while retrieving chunk {chunk_id} from {peer_host}")
+                    except Exception as e:
+                        print(f"Error retrieving chunk {chunk_id} from {peer_host}: {str(e)}")
+                    finally:
+                        client.close()
+
+                if found_chunk:
+                    break
+
+            # If the chunk was not found on any peer, assume we've retrieved all available chunks
             if not found_chunk:
-                flash(f"Failed to retrieve chunk {chunk_id}")
-                return None, None, None
+                missing_chunk = True
+
+            # Move to the next chunk ID
+            chunk_id_index += 1
+
+        # If no chunks were found, return a failure message
+        if not retrieved_chunks:
+            flash('Failed to retrieve file')
+            return None, None
 
         # Sort chunks by chunk_id
         retrieved_chunks.sort(key=lambda x: int(x[0].split('_chunk_')[-1]))
@@ -211,23 +349,84 @@ class Node:
         # Reassemble and decrypt the file
         encrypted_file = b''.join(chunk for _, chunk in retrieved_chunks)
         decrypted_file = self.cipher.decrypt(encrypted_file)
-        return decrypted_file, filename, timestamp
+        return decrypted_file, filename
+
 
     def calculate_total_network_storage(self):
         """Calculate the total available storage across all peers."""
         return sum(peer_storage for _, peer_storage in self.peers) + (self.storage_limit - self.used_storage) / (1024 * 1024)
+    
+    
+    
+    def delete_chunks_from_peer(self, peer_host):
+        """Delete all chunks that belong to the specified peer."""
+        chunk_folder = os.path.join('peer_storage', peer_host)
+        
+        # Check if the directory exists
+        if os.path.exists(chunk_folder):
+            for filename in os.listdir(chunk_folder):
+                file_path = os.path.join(chunk_folder, filename)
+                if os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                        print(f"Deleted chunk from {peer_host}: {file_path}")
+                    except Exception as e:
+                        print(f"Error deleting chunk {file_path}: {str(e)}")
+            
+            # Remove the directory if empty
+            try:
+                os.rmdir(chunk_folder)
+                print(f"Deleted peer chunk folder: {chunk_folder}")
+            except OSError:
+                # Directory isn't empty or another error occurred
+                pass
+
+    def notify_delete_chunks(self):
+        """Notify all connected peers to delete chunks related to this peer."""
+        for peer_host, _ in self.peers:
+            with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as client:
+                try:
+                    client.connect((peer_host, COMMON_PORT))
+                    send_data(client, ('DELETE_CHUNKS', self.host))
+                except Exception as e:
+                    print(f"Error notifying peer {peer_host} to delete chunks: {str(e)}")
+
+
 
     def leave_network(self):
+        """Leave the network, delete all local chunks, and notify peers to delete stored data."""
+        # Notify other peers to delete chunks associated with this peer
+        self.notify_delete_chunks()
+
+        # Clear local storage
         self.storage.clear()
-        upload_folder = app.config['UPLOAD_FOLDER']
-        for filename in os.listdir(upload_folder):
-            file_path = os.path.join(upload_folder, filename)
-            if os.path.isfile(file_path):
-                os.remove(file_path)
-                print(f"Deleted file: {file_path}")
+        self.used_storage = 0
+
+        # Delete all files in the chunk folder specific to this peer
+        chunk_folder = os.path.join('peer_storage', self.host)
+        if os.path.exists(chunk_folder):
+            for filename in os.listdir(chunk_folder):
+                file_path = os.path.join(chunk_folder, filename)
+                if os.path.isfile(file_path):
+                    try:
+                        os.remove(file_path)
+                        print(f"Deleted file: {file_path}")
+                    except Exception as e:
+                        print(f"Error deleting file {file_path}: {str(e)}")
+
+            # Optionally remove the entire folder if it's empty
+            try:
+                os.rmdir(chunk_folder)
+                print(f"Deleted chunk folder: {chunk_folder}")
+            except OSError:
+                # Folder isn't empty or other error occurred, ignore it
+                pass
+
+        flash('Left the network and deleted all stored data')
+
 
 # Initialize Node with the current host IP
-current_host = socket.gethostbyname(socket.gethostname())
+current_host = "192.168.247.219" #socket.gethostbyname(socket.gethostname())
 node = None
 
 @app.route('/')
@@ -277,15 +476,16 @@ def retrieve():
         flash('Filename is required')
         return redirect(url_for('index'))
 
-    file_data, filename, timestamp = node.retrieve_file(filename)
+    file_data, filename = node.retrieve_file(filename)
     if file_data:
         file_stream = BytesIO(file_data)
         file_stream.seek(0)
-        download_filename = f"{filename}_{time.strftime('%Y%m%d-%H%M%S', time.localtime(timestamp))}"
+        download_filename = f"{filename}"
         return send_file(file_stream, download_name=download_filename, as_attachment=True)
     else:
         flash('Failed to retrieve file')
         return redirect(url_for('index'))
+
 
 
 @app.route('/leave', methods=['POST'])
